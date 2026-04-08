@@ -1,50 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { Transaction } from '../../domain/types'
-
-const transactionsStore = new Map<string, Transaction>()
-
-vi.mock('../db', () => ({
-  db: {
-    transactions: {
-      bulkAdd: async (transactions: Transaction[]) => {
-        for (const transaction of transactions) {
-          transactionsStore.set(transaction.id, transaction)
-        }
-
-        return transactions.map((transaction) => transaction.id)
-      },
-      clear: async () => {
-        transactionsStore.clear()
-      },
-      where: (field: 'fingerprint' | 'fileId') => ({
-        anyOf: (values: string[]) => ({
-          toArray: async () =>
-            Array.from(transactionsStore.values()).filter((transaction) => values.includes(transaction[field])),
-        }),
-        equals: (value: string) => ({
-          delete: async () => {
-            let deletedCount = 0
-
-            for (const [id, transaction] of transactionsStore.entries()) {
-              if (transaction[field] === value) {
-                transactionsStore.delete(id)
-                deletedCount += 1
-              }
-            }
-
-            return deletedCount
-          },
-          sortBy: async (sortField: 'dateTs') =>
-            Array.from(transactionsStore.values())
-              .filter((transaction) => transaction[field] === value)
-              .sort((a, b) => a[sortField] - b[sortField]),
-        }),
-      }),
-    },
-  },
-}))
-
 import { db } from '../db'
 import {
   bulkAddTransactions,
@@ -72,6 +28,7 @@ function makeTransaction(overrides: Partial<Transaction> = {}): Transaction {
 describe('transactions.repo', () => {
   beforeEach(async () => {
     await db.transactions.clear()
+    await db.files.clear()
   })
 
   it('adiciona transacoes em lote e busca por fileId', async () => {

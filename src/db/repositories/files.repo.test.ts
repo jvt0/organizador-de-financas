@@ -1,40 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { ImportedFile } from '../../domain/types'
-
-const filesStore = new Map<string, ImportedFile>()
-
-vi.mock('../db', () => ({
-  db: {
-    files: {
-      add: async (file: ImportedFile) => {
-        filesStore.set(file.id, file)
-        return file.id
-      },
-      get: async (id: string) => filesStore.get(id),
-      delete: async (id: string) => {
-        filesStore.delete(id)
-      },
-      clear: async () => {
-        filesStore.clear()
-      },
-      where: (field: 'hash') => ({
-        equals: (value: string) => ({
-          first: async () => {
-            for (const file of filesStore.values()) {
-              if (file[field] === value) {
-                return file
-              }
-            }
-
-            return undefined
-          },
-        }),
-      }),
-    },
-  },
-}))
-
 import { db } from '../db'
 import { addFile, deleteFileById, getFileByHash, getFileById } from './files.repo'
 
@@ -55,6 +21,7 @@ function makeImportedFile(overrides: Partial<ImportedFile> = {}): ImportedFile {
 describe('files.repo', () => {
   beforeEach(async () => {
     await db.files.clear()
+    await db.transactions.clear()
   })
 
   it('adiciona arquivo e consulta por hash e id', async () => {
