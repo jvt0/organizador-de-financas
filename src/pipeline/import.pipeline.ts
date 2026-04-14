@@ -8,7 +8,7 @@ import type {
 } from '../domain/types';
 import { db } from '../db/db';
 import { addFile, getFileByHash } from '../db/repositories/files.repo';
-import { bulkAddTransactions } from '../db/repositories/transactions.repo';
+import { bulkAddTransactions, getExistingFingerprints } from '../db/repositories/transactions.repo';
 import { detectOwnTransfer, normalizeCounterparty } from '../normalization/counterparty';
 import { normalizeTransactionDate, type DateInput } from '../normalization/date';
 import {
@@ -16,8 +16,10 @@ import {
   normalizeTransactionAmount,
   type MonetaryInput,
 } from '../normalization/amount';
-import { filterExactDuplicates } from './deduplication';
 
+/**
+ * Representação inicial de uma transação estruturada vinda de um parser (CSV/PDF)
+ */
 export type StructuredImportTransaction = {
   id: string;
   date: DateInput;
@@ -41,51 +43,70 @@ export type ImportPipelineInput = {
 };
 
 export type ImportResult = {
-  file: ImportedFile;
-  acceptedTransactions: Transaction[];
-  blockedTransactions: Transaction[];
+  fileId: string;
+  /** Total de linhas no arquivo de entrada */
   totalCount: number;
-  acceptedCount: number;
+  /** Transações genuinamente novas inseridas no banco */
+  newCount: number;
+  /** Transações bloqueadas por já existirem (mesmo fingerprint) */
   duplicateCount: number;
 };
 
+/**
+ * O Maestro: Coordena o fluxo desde a entrada bruta até ao salvamento no banco.
+ *
+ * Garantias:
+ *   - Atômica: ou tudo persiste, ou nada (rollback automático pelo Dexie).
+ *   - Sem race condition: o guard de hash e a deduplicação ocorrem dentro da
+ *     mesma transação IDB, tornando-os serializados por construção.
+ *   - Sem ConstraintError: apenas transações com fingerprint inédito chegam ao bulkAdd.
+ */
 export async function runImportPipeline(input: ImportPipelineInput): Promise<ImportResult> {
-  const existingFile = await getFileByHash(input.file.hash);
-
-  if (existingFile) {
-    throw new Error(`Imported file with hash "${input.file.hash}" already exists.`);
-  }
-
-  const normalizedTransactions = input.transactions.map((transaction) =>
-    normalizeImportTransaction(transaction, input.file.id, input.file.sourceType, input.options),
+  // 1. Normalização (CPU puro — sem I/O de banco)
+  const normalizedTransactions = input.transactions.map((t) =>
+    normalizeImportTransaction(t, input.file.id, input.file.sourceType, input.options),
   );
-  const deduplicationResult = await filterExactDuplicates(normalizedTransactions);
 
-  const file: ImportedFile = {
-    ...input.file,
-    rowCount: input.transactions.length,
-    validRowCount: deduplicationResult.acceptedTransactions.length,
-    ignoredRowCount: deduplicationResult.blockedTransactions.length,
-  };
+  // 2. Persistência atômica: todo I/O de banco ocorre dentro desta transação Dexie
+  return db.transaction('rw', [db.files, db.transactions], async () => {
+    // 2a. Guard de hash dentro da tx — elimina a race condition de importações concorrentes
+    const existingFile = await getFileByHash(input.file.hash);
+    if (existingFile) {
+      throw new Error(`O arquivo com hash "${input.file.hash}" já foi importado.`);
+    }
 
-  await db.transaction('rw', db.files, db.transactions, async () => {
+    // 2b. Deduplicação com leitura consistente dentro da mesma transação IDB
+    const { acceptedTransactions, blockedTransactions } =
+      await deduplicateTransactions(normalizedTransactions);
+
+    // 2c. Persiste o arquivo com contagens reais pós-deduplicação
+    const file: ImportedFile = {
+      ...input.file,
+      rowCount: input.transactions.length,
+      validRowCount: acceptedTransactions.length,
+      ignoredRowCount: blockedTransactions.length,
+    };
     await addFile(file);
 
-    if (deduplicationResult.acceptedTransactions.length > 0) {
-      await bulkAddTransactions(deduplicationResult.acceptedTransactions);
-    }
-  });
+    // 2d. Persiste apenas as transações genuinamente novas — sem risco de ConstraintError
+    await bulkAddTransactions(acceptedTransactions);
 
-  return {
-    file,
-    acceptedTransactions: deduplicationResult.acceptedTransactions,
-    blockedTransactions: deduplicationResult.blockedTransactions,
-    totalCount: input.transactions.length,
-    acceptedCount: deduplicationResult.acceptedTransactions.length,
-    duplicateCount: deduplicationResult.blockedTransactions.length,
-  };
+    return {
+      fileId: file.id,
+      totalCount: file.rowCount,
+      newCount: acceptedTransactions.length,
+      duplicateCount: blockedTransactions.length,
+    };
+  });
 }
 
+/**
+ * Converte e padroniza os campos de uma transação bruta em domínio.
+ *
+ * Invariante chave: `id` é definido como o fingerprint.
+ * Isso garante que o primary key do IndexedDB seja globalmente único por conteúdo,
+ * eliminando colisões de ID entre arquivos distintos e tornando o bulkAdd seguro.
+ */
 function normalizeImportTransaction(
   transaction: StructuredImportTransaction,
   fileId: string,
@@ -96,14 +117,27 @@ function normalizeImportTransaction(
   const normalizedAmount = transaction.direction
     ? normalizeAmountWithDirection(transaction.amount, transaction.direction)
     : normalizeTransactionAmount(transaction.amount, options?.negativeMeansOutflow);
+
   const counterpartyNormalized = normalizeCounterparty(transaction.counterparty);
   const ownTransfer = detectOwnTransfer({
     description: transaction.description,
     counterparty: transaction.counterparty,
   });
 
-  const normalizedTransaction: Transaction = {
-    id: transaction.id,
+  // Computa o fingerprint primeiro — ele se torna o ID da transação no banco.
+  // Isso garante que: (a) o ID seja globalmente único por conteúdo, (b) bulkAdd
+  // nunca sofra ConstraintError por colisão de ID entre arquivos diferentes,
+  // e (c) o campo `raw` preserve o ID original do parser para rastreabilidade.
+  const fingerprintInput = {
+    dateTs: normalizedDate.dateTs,
+    amount: normalizedAmount.amount,
+    direction: normalizedAmount.direction,
+    description: transaction.description,
+  };
+  const fingerprint = buildTransactionFingerprint(fingerprintInput);
+
+  return {
+    id: fingerprint,
     fileId,
     source,
     date: normalizedDate.date,
@@ -117,13 +151,40 @@ function normalizeImportTransaction(
     ownTransfer,
     category: transaction.category,
     tags: transaction.tags,
-    fingerprint: '',
-    possibleDuplicateKey: undefined,
+    fingerprint,
+    possibleDuplicateKey: buildPossibleDuplicateKey(fingerprintInput),
     raw: transaction.raw,
   };
+}
 
-  normalizedTransaction.fingerprint = buildTransactionFingerprint(normalizedTransaction);
-  normalizedTransaction.possibleDuplicateKey = buildPossibleDuplicateKey(normalizedTransaction);
+type DeduplicationResult = {
+  acceptedTransactions: Transaction[];
+  blockedTransactions: Transaction[];
+};
 
-  return normalizedTransaction;
+/**
+ * Separa transações novas das duplicadas, consultando o banco e o próprio lote.
+ * Deve ser chamada DENTRO de um db.transaction para garantir leitura consistente.
+ */
+async function deduplicateTransactions(transactions: Transaction[]): Promise<DeduplicationResult> {
+  const persistedFingerprints = new Set(
+    await getExistingFingerprints(transactions.map((t) => t.fingerprint)),
+  );
+  const batchFingerprints = new Set<string>();
+  const acceptedTransactions: Transaction[] = [];
+  const blockedTransactions: Transaction[] = [];
+
+  for (const transaction of transactions) {
+    if (
+      persistedFingerprints.has(transaction.fingerprint) ||
+      batchFingerprints.has(transaction.fingerprint)
+    ) {
+      blockedTransactions.push(transaction);
+    } else {
+      batchFingerprints.add(transaction.fingerprint);
+      acceptedTransactions.push(transaction);
+    }
+  }
+
+  return { acceptedTransactions, blockedTransactions };
 }

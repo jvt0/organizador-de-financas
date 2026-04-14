@@ -1,20 +1,32 @@
-import { db, type Transaction } from '../db';
+import type { Transaction } from '../../domain/types';
+import { db } from '../db';
 
-export const transactionsRepo = {
-  // Busca todas para o Front-end
-  async findAll(): Promise<Transaction[]> {
-    return db.transactions.orderBy('dateTs').reverse().toArray();
-  },
+export async function bulkAddTransactions(transactions: Transaction[]): Promise<void> {
+  await db.transactions.bulkAdd(transactions);
+}
 
-  // Grava as transações injetando no banco de forma atômica
-  async saveAll(transactions: Transaction[]): Promise<void> {
-    // Usamos bulkPut porque se o ID (fingerprint) já existir, ele só sobrescreve
-    // Isso evita o erro de "ConstraintError" por IDs duplicados
-    await db.transactions.bulkPut(transactions);
-  },
+export async function getExistingFingerprints(fingerprints: string[]): Promise<string[]> {
+  if (fingerprints.length === 0) return [];
+  const found = await db.transactions.where('fingerprint').anyOf(fingerprints).toArray();
+  return found.map((t) => t.fingerprint);
+}
 
-  async clearAll(): Promise<void> {
-    await db.transactions.clear();
-    await db.files.clear();
-  }
-};
+export async function getTransactionsByFileId(fileId: string): Promise<Transaction[]> {
+  return db.transactions.where('fileId').equals(fileId).sortBy('dateTs');
+}
+
+export async function deleteTransactionsByFileId(fileId: string): Promise<void> {
+  await db.transactions.where('fileId').equals(fileId).delete();
+}
+
+export async function findAll(): Promise<Transaction[]> {
+  return db.transactions.orderBy('dateTs').reverse().toArray();
+}
+
+export async function clearAll(): Promise<void> {
+  await db.transactions.clear();
+  await db.files.clear();
+}
+
+// Objeto para compatibilidade com consumidores que usam transactionsRepo.findAll()
+export const transactionsRepo = { findAll, clearAll };

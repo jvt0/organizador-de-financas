@@ -60,9 +60,21 @@ Domain invariants (DO NOT BREAK)
 
     fingerprint is an FNV-1a hash of (utcDayTimestamp | amount | direction | normalizedDescription).
 
+    Transaction.id MUST always equal Transaction.fingerprint. This is the content-addressed primary key.
+    Reason: guarantees global uniqueness across files, prevents ConstraintError on bulkAdd, and makes
+    deduplication correct by construction. Never set id from a parser row-id or any other source.
+
     Dates are stored as UTC-midnight timestamps (dateTs) and ISO strings (date: yyyy-MM-dd).
 
     ownTransfer follows a conservative heuristic: prefer undefined over false when confidence is low.
+
+    Every DB write in runImportPipeline MUST run inside db.transaction('rw', [db.files, db.transactions], ...).
+    This includes the hash guard (getFileByHash) and the deduplication read (getExistingFingerprints).
+    Reason: atomicity + race-condition safety. A hash check outside the transaction is not a guard.
+
+    runImportPipeline MUST return the full ImportResult shape: { fileId, totalCount, newCount, duplicateCount }.
+    The UI depends on newCount and duplicateCount to give precise feedback to the user.
+    Never simplify this to a bare count.
 
 UI/UX & Code Style Guidelines
 
