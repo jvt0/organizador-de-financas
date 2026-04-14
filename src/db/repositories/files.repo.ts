@@ -16,3 +16,14 @@ export async function getFileById(id: string): Promise<ImportedFile | undefined>
 export async function deleteFileById(id: string): Promise<void> {
   await db.files.delete(id);
 }
+
+/**
+ * Remove um arquivo e todas as suas transações em uma única transação atômica.
+ * Se qualquer operação falhar, nenhuma alteração é persistida (rollback automático).
+ */
+export async function deleteFile(fileId: string): Promise<void> {
+  await db.transaction('rw', [db.files, db.transactions], async () => {
+    await db.files.delete(fileId);
+    await db.transactions.where('fileId').equals(fileId).delete();
+  });
+}

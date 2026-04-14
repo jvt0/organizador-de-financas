@@ -9,6 +9,7 @@ import type {
 import { db } from '../db/db';
 import { addFile, getFileByHash } from '../db/repositories/files.repo';
 import { bulkAddTransactions, getExistingFingerprints } from '../db/repositories/transactions.repo';
+import { normalizeDescription } from '../normalization/description';
 import { detectOwnTransfer, normalizeCounterparty } from '../normalization/counterparty';
 import { normalizeTransactionDate, type DateInput } from '../normalization/date';
 import {
@@ -124,15 +125,24 @@ function normalizeImportTransaction(
     counterparty: transaction.counterparty,
   });
 
-  // Computa o fingerprint primeiro — ele se torna o ID da transação no banco.
-  // Isso garante que: (a) o ID seja globalmente único por conteúdo, (b) bulkAdd
-  // nunca sofra ConstraintError por colisão de ID entre arquivos diferentes,
-  // e (c) o campo `raw` preserve o ID original do parser para rastreabilidade.
+  // sourceRowId = ID da linha fornecido pelo parser (ex: 'row-0', 'row-1').
+  // Incluído no fingerprint para que duas transações idênticas em linhas distintas
+  // do mesmo arquivo (ex: dois cafés de R$5,00 no mesmo dia) sejam tratadas
+  // como registros independentes e preservem o saldo real do extrato.
+  const sourceRowId = transaction.id;
+
+  // Money Pattern: converte o float normalizado para unidade mínima da moeda (centavos).
+  // Math.round elimina o drift binário: 0.1 + 0.2 = 0.30000...004 → round → 30 centavos exatos.
+  const currency = 'BRL';
+  const precision = 2;
+  const amountInUnits = Math.round(normalizedAmount.amount * 10 ** precision);
+
   const fingerprintInput = {
     dateTs: normalizedDate.dateTs,
-    amount: normalizedAmount.amount,
+    amountInUnits,
     direction: normalizedAmount.direction,
     description: transaction.description,
+    sourceRowId,
   };
   const fingerprint = buildTransactionFingerprint(fingerprintInput);
 
@@ -142,9 +152,13 @@ function normalizeImportTransaction(
     source,
     date: normalizedDate.date,
     dateTs: normalizedDate.dateTs,
-    amount: normalizedAmount.amount,
+    amountInUnits,
+    currency,
+    precision,
     direction: normalizedAmount.direction,
     description: transaction.description,
+    descriptionNormalized: normalizeDescription(transaction.description),
+    sourceRowId,
     counterparty: transaction.counterparty,
     counterpartyNormalized,
     bankName: transaction.bankName,

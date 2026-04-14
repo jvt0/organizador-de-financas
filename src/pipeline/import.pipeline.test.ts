@@ -8,21 +8,30 @@ import { transactionsRepo } from '../db/repositories/transactions.repo' // Impor
 import { runImportPipeline } from './import.pipeline'
 
 function makePersistedTransaction(overrides: Partial<Transaction> = {}): Transaction {
+  // amountInUnits: 10000 = R$100,00 em centavos (amount '-100,00' no CSV → 100.00 float → 10000 units)
+  // sourceRowId deve coincidir com o id do row-1 no arquivo de teste para que
+  // a deduplicação detecte a transação como já existente no banco.
+  const fp = buildTransactionFingerprint({
+    amountInUnits: 10000,
+    dateTs: Date.UTC(2024, 2, 15),
+    direction: 'out',
+    description: 'Pix enviado',
+    sourceRowId: 'row-1',
+  });
   return {
-    id: 'persisted-1',
+    id: fp,
     fileId: 'old-file',
     source: 'inter',
     date: '2024-03-15',
     dateTs: Date.UTC(2024, 2, 15),
-    amount: 100,
+    amountInUnits: 10000,
+    currency: 'BRL',
+    precision: 2,
     direction: 'out',
     description: 'Pix enviado',
-    fingerprint: buildTransactionFingerprint({
-      amount: 100,
-      dateTs: Date.UTC(2024, 2, 15),
-      direction: 'out',
-      description: 'Pix enviado',
-    }),
+    descriptionNormalized: 'pix enviado',
+    sourceRowId: 'row-1',
+    fingerprint: fp,
     possibleDuplicateKey: 'dup-1',
     ...overrides,
   }
@@ -94,11 +103,14 @@ describe('runImportPipeline', () => {
     // a regra de negócio do fingerprint cuidará da unicidade.
     expect(todasTransacoes.length).toBe(2) 
 
-    // 5. Validação da transação nova específica (id agora é o fingerprint, não o row-id do parser)
-    const novaTransacao = todasTransacoes.find(t => t.amount === 250)
+    // 5. Validação da transação nova específica
+    // amountInUnits: 25000 = R$250,00 em centavos ('-250,00' no CSV → 250.00 float → 25000 units)
+    const novaTransacao = todasTransacoes.find(t => t.amountInUnits === 25000)
     expect(novaTransacao).toMatchObject({
       fileId: 'file-1',
-      amount: 250,
+      amountInUnits: 25000,
+      currency: 'BRL',
+      precision: 2,
       direction: 'out',
       ownTransfer: true,
     })

@@ -30,12 +30,21 @@ export type Transaction = {
   date: string;
   dateTs: number;
   /**
-   * Domain invariant: amount is always positive.
-   * Direction carries the financial meaning of the movement.
+   * Money Pattern: valor armazenado na menor unidade da moeda (ex: centavos para BRL).
+   * Nunca use float para valores monetários — soma de floats acumula drift binário.
+   * Display: amountInUnits / 10^precision  →  formatMoney() em src/utils/money.ts
    */
-  amount: number;
+  amountInUnits: number;
+  /** Código ISO 4217 da moeda (ex: 'BRL', 'USD'). Obrigatório para suporte multi-moeda. */
+  currency: string;
+  /** Casas decimais da moeda. Default 2 (centavos). JPY=0, KWD=3. */
+  precision: number;
   direction: Direction;
   description: string;
+  /** Campo gerado pela normalização de descrição para agrupamento por padrão de consumo */
+  descriptionNormalized: string;
+  /** ID original da linha no arquivo fonte — parte do fingerprint para preservar transações idênticas */
+  sourceRowId: string;
   counterparty?: string;
   counterpartyNormalized?: string;
   bankName?: string;

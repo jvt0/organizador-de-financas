@@ -1,23 +1,23 @@
-import { FINGERPRINT_AMOUNT_PRECISION } from './constants';
 import type { Direction, Transaction } from './types';
 
-type FingerprintInput = Pick<Transaction, 'amount' | 'dateTs' | 'description' | 'direction'>;
+type FingerprintInput = Pick<Transaction, 'amountInUnits' | 'dateTs' | 'description' | 'direction' | 'sourceRowId'>;
 
-type PossibleDuplicateInput = Pick<Transaction, 'amount' | 'dateTs' | 'direction'>;
+type PossibleDuplicateInput = Pick<Transaction, 'amountInUnits' | 'dateTs' | 'direction'>;
 
 export function buildTransactionFingerprint(input: FingerprintInput): string {
   return hashFingerprintParts([
     String(normalizeDateToUtcDayTimestamp(input.dateTs)),
-    normalizePositiveAmount(input.amount),
+    normalizePositiveAmountUnits(input.amountInUnits),
     input.direction,
     normalizeFingerprintText(input.description),
+    input.sourceRowId,
   ]);
 }
 
 export function buildPossibleDuplicateKey(input: PossibleDuplicateInput): string {
   return hashFingerprintParts([
     String(normalizeDateToUtcDayTimestamp(input.dateTs)),
-    normalizePositiveAmount(input.amount),
+    normalizePositiveAmountUnits(input.amountInUnits),
     input.direction,
   ]);
 }
@@ -37,12 +37,19 @@ export function normalizeFingerprintText(value: string): string {
     .trim();
 }
 
-export function normalizePositiveAmount(amount: number): string {
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error('Transaction amount must be a finite positive number.');
+/**
+ * Serializa amountInUnits (inteiro, ex: 1000 para R$10,00) para o hash.
+ * Inteiros são representados diretamente como string — sem ponto flutuante.
+ */
+export function normalizePositiveAmountUnits(amountInUnits: number): string {
+  if (!Number.isFinite(amountInUnits) || amountInUnits <= 0 || !Number.isInteger(amountInUnits)) {
+    throw new Error(
+      `amountInUnits must be a positive integer. Received: ${amountInUnits}. ` +
+        'Use Math.round(amount * 10^precision) before fingerprinting.',
+    );
   }
 
-  return amount.toFixed(FINGERPRINT_AMOUNT_PRECISION);
+  return String(amountInUnits);
 }
 
 export function isValidDirection(direction: string): direction is Direction {
