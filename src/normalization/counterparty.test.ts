@@ -25,6 +25,27 @@ describe('normalizeCounterparty', () => {
   it('retorna undefined quando sobra apenas ruído removível', () => {
     expect(normalizeCounterparty('pix recebido')).toBeUndefined()
   })
+
+  it('XSS Guard: string com tags HTML é tratada como texto puro, sem execução', () => {
+    // normalizeCounterpartyText remove <, > via [^a-z0-9\s] → texto puro sem HTML
+    const result = normalizeCounterparty('<script>alert(1)</script>')
+    expect(result).toBe('script alert 1 script')
+    expect(result).not.toContain('<')
+    expect(result).not.toContain('>')
+  })
+
+  it('retorna undefined para string composta apenas de emoji', () => {
+    // emoji → removido por [^a-z0-9\s] → string vazia → undefined
+    expect(normalizeCounterparty('☕🥐🎉')).toBeUndefined()
+  })
+
+  it('string muito longa não causa crash e retorna resultado normalizado', () => {
+    const longName = 'João Silva '.repeat(200) // ~2200 caracteres
+    const result = normalizeCounterparty(longName)
+    // Deve retornar algo definido (não undefined) e não lançar exceção
+    expect(result).toBeDefined()
+    expect(result).toContain('joao silva')
+  })
 })
 
 describe('detectOwnTransfer', () => {

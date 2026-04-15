@@ -73,9 +73,32 @@ describe('parseCsvText', () => {
 })
 
   it('preserva errors do PapaParse quando o CSV está malformado', () => {
-  const result = parseCsvText('nome,valor\n"abc,123')
+    const result = parseCsvText('nome,valor\n"abc,123')
 
-  expect(result.errors.length).toBeGreaterThan(0)
+    expect(result.errors.length).toBeGreaterThan(0)
+  })
+
+  it('parseia CRLF (Windows line endings) sem incluir carriage return nos valores', () => {
+    const result = parseCsvText('nome,valor\r\nana,10\r\ncarlos,20')
+
+    expect(result.rows).toEqual([
+      ['nome', 'valor'],
+      ['ana', '10'],
+      ['carlos', '20'],
+    ])
+    expect(result.errors).toEqual([])
+    // Nenhum valor deve conter \r residual
+    expect(result.rows.flat().every(cell => !cell.includes('\r'))).toBe(true)
+  })
+
+  it('parseia arquivo com tab como delimitador', () => {
+    const result = parseCsvText('nome\tvalor\nana\t10')
+
+    expect(result.rows).toEqual([
+      ['nome', 'valor'],
+      ['ana', '10'],
+    ])
+    expect(result.meta.delimiter).toBe('\t')
   })
 
 })
@@ -87,6 +110,16 @@ describe('normalizeCell', () => {
   })
 })
 
+describe('stripBom', () => {
+  it('não altera string sem BOM', () => {
+    expect(stripBom('col1,col2\n1,2')).toBe('col1,col2\n1,2')
+  })
+
+  it('não altera string vazia', () => {
+    expect(stripBom('')).toBe('')
+  })
+})
+
 describe('getHeadersFromRow', () => {
   it('retorna headers com trim a partir de qualquer linha', () => {
     expect(getHeadersFromRow([' Nome ', ' Valor ', '  Data'])).toEqual([
@@ -95,6 +128,10 @@ describe('getHeadersFromRow', () => {
       'Data',
     ])
   })
+
+  it('retorna array vazio para undefined', () => {
+    expect(getHeadersFromRow(undefined)).toEqual([])
+  })
 })
 
 describe('getPreviewRows', () => {
@@ -102,6 +139,10 @@ describe('getPreviewRows', () => {
     const rows = [['1'], ['2'], ['3']]
 
     expect(getPreviewRows(rows, 2)).toEqual([['1'], ['2']])
+  })
+
+  it('retorna array vazio quando limite é 0', () => {
+    expect(getPreviewRows([['1'], ['2']], 0)).toEqual([])
   })
 })
 

@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Transaction } from '../domain/types'
 import { buildTransactionFingerprint } from '../domain/fingerprint'
 import { db } from '../db/db'
 import { addFile, getFileById } from '../db/repositories/files.repo'
-import { transactionsRepo } from '../db/repositories/transactions.repo' // Importação corrigida
+import { transactionsRepo } from '../db/repositories/transactions.repo'
 import { runImportPipeline } from './import.pipeline'
 
 function makePersistedTransaction(overrides: Partial<Transaction> = {}): Transaction {
@@ -41,6 +41,10 @@ describe('runImportPipeline', () => {
   beforeEach(async () => {
     await db.transactions.clear()
     await db.files.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('persiste o arquivo e as transações, lidando com duplicatas via banco', async () => {
@@ -116,7 +120,181 @@ describe('runImportPipeline', () => {
     })
   })
 
-  it('falha explicitamente quando o hash do arquivo ja existe', async () => {
+  it('XSS Guard: descrição maliciosa é armazenada como texto puro e descriptionNormalized remove tags HTML', async () => {
+    const XSS_DESC = '<script>alert("xss")</script>'
+
+    await runImportPipeline({
+      file: {
+        id: 'xss-file',
+        name: 'xss.csv',
+        sourceType: 'inter',
+        hash: 'xss-hash',
+        uploadedAt: new Date().toISOString(),
+      },
+      transactions: [
+        { id: 'row-1', date: '2024-03-15', amount: '50,00', description: XSS_DESC, direction: 'out' },
+      ],
+    })
+
+    const [tx] = await db.transactions.toArray()
+
+    // description raw preservada como texto puro no banco (sem execução possível via IndexedDB)
+    expect(tx.description).toBe(XSS_DESC)
+
+    // descriptionNormalized não contém caracteres HTML — normalizeDescription remove via [^a-z0-9\s]
+    expect(tx.descriptionNormalized).not.toContain('<')
+    expect(tx.descriptionNormalized).not.toContain('>')
+    expect(tx.descriptionNormalized).not.toContain('"')
+    // resultado esperado: 'script alert xss script' (tags e parênteses viram espaços, depois colapsados)
+    expect(tx.descriptionNormalized).toBe('script alert xss script')
+
+    // Invariante: id === fingerprint (content-addressed primary key)
+    expect(tx.id).toBe(tx.fingerprint)
+
+    // Invariante Money Pattern: amountInUnits é inteiro positivo em centavos
+    expect(Number.isInteger(tx.amountInUnits)).toBe(true)
+    expect(tx.amountInUnits).toBe(5000) // R$50,00 → 5000 centavos
+  })
+
+  it('Atomicidade: banco sem sujeira quando bulkAdd falha durante a transação', async () => {
+    const spy = vi
+      .spyOn(db.transactions, 'bulkAdd')
+      .mockRejectedValueOnce(new Error('QuotaExceededError: storage quota exceeded'))
+
+    await expect(
+      runImportPipeline({
+        file: {
+          id: 'atomic-file',
+          name: 'atomic.csv',
+          sourceType: 'inter',
+          hash: 'atomic-hash',
+          uploadedAt: new Date().toISOString(),
+        },
+        transactions: [
+          { id: 'row-1', date: '2024-01-01', amount: '100,00', description: 'Pagamento', direction: 'out' },
+        ],
+      }),
+    ).rejects.toThrow('QuotaExceededError')
+
+    // Nenhum arquivo deve ter sido persistido — rollback da transação Dexie inclui addFile
+    expect(await db.files.count()).toBe(0)
+
+    // Nenhuma transação deve ter sido persistida — estado limpo após falha
+    expect(await db.transactions.count()).toBe(0)
+  })
+
+  it('Idempotência Cruzada: mesmo conteúdo com hash diferente → duplicatas bloqueadas por fingerprint', async () => {
+    const transactions = [
+      { id: 'row-1', date: '2024-03-15', amount: '-100,00', description: 'Pix enviado' },
+      { id: 'row-2', date: '2024-03-20', amount: '250,00', description: 'Salario recebido', direction: 'in' as const },
+    ]
+
+    // Primeira importação — tudo novo
+    const result1 = await runImportPipeline({
+      file: { id: 'file-v1', name: 'extrato-v1.csv', sourceType: 'inter', hash: 'hash-v1', uploadedAt: new Date().toISOString() },
+      transactions,
+    })
+    expect(result1.newCount).toBe(2)
+    expect(result1.duplicateCount).toBe(0)
+
+    // Segunda importação: mesmas transações (mesmo id de linha → mesmo fingerprint), hash diferente
+    const result2 = await runImportPipeline({
+      file: { id: 'file-v2', name: 'extrato-v2.csv', sourceType: 'inter', hash: 'hash-v2', uploadedAt: new Date().toISOString() },
+      transactions,
+    })
+    expect(result2.newCount).toBe(0)
+    expect(result2.duplicateCount).toBe(2)
+
+    // Banco inalterado: exatamente 2 transações únicas
+    expect(await db.transactions.count()).toBe(2)
+
+    // Ambos os arquivos foram registrados (mesmo quando todas as transações são duplicatas)
+    expect(await db.files.count()).toBe(2)
+  })
+
+  it('Race Condition: importações simultâneas do mesmo arquivo — apenas uma persiste', async () => {
+    const file = {
+      id: 'race-file',
+      name: 'extrato.csv',
+      sourceType: 'inter' as const,
+      hash: 'race-hash',
+      uploadedAt: new Date().toISOString(),
+    }
+    const transactions = [
+      { id: 'row-1', date: '2024-06-01', amount: '-200,00', description: 'Aluguel' },
+    ]
+
+    // Dispara duas importações idênticas ao mesmo tempo
+    const [r1, r2] = await Promise.allSettled([
+      runImportPipeline({ file, transactions }),
+      runImportPipeline({ file, transactions }),
+    ])
+
+    const fulfilled = [r1, r2].filter((r) => r.status === 'fulfilled')
+    const rejected  = [r1, r2].filter((r) => r.status === 'rejected')
+
+    // Exatamente uma deve ter sucesso e a outra deve falhar com erro amigável
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+
+    const error = (rejected[0] as PromiseRejectedResult).reason as Error
+    expect(error.message).toContain('race-hash')
+    expect(error.message).toContain('já foi importado')
+
+    // DB íntegro: exatamente 1 arquivo e 1 transação únicos — sem corrupção
+    expect(await db.files.count()).toBe(1)
+    expect(await db.transactions.count()).toBe(1)
+  })
+
+  it('Valores Extremos: zero rejeita na normalização; R$1 bilhão persiste sem perda de precisão', async () => {
+    // Zero deve ser rejeitado durante o map() de normalização (antes de tocar o banco)
+    await expect(
+      runImportPipeline({
+        file: {
+          id: 'zero-file',
+          name: 'zero.csv',
+          sourceType: 'inter',
+          hash: 'zero-hash',
+          uploadedAt: new Date().toISOString(),
+        },
+        transactions: [
+          { id: 'row-1', date: '2024-01-01', amount: '0,00', description: 'Valor zero', direction: 'out' },
+        ],
+      }),
+    ).rejects.toThrow('Transaction amount must be greater than zero')
+
+    // Banco permanece limpo — o erro ocorreu antes de qualquer write Dexie
+    expect(await db.files.count()).toBe(0)
+    expect(await db.transactions.count()).toBe(0)
+
+    // R$1.000.000.000,00 deve persistir sem drift de float (Money Pattern)
+    await runImportPipeline({
+      file: {
+        id: 'billion-file',
+        name: 'billion.csv',
+        sourceType: 'inter',
+        hash: 'billion-hash',
+        uploadedAt: new Date().toISOString(),
+      },
+      transactions: [
+        { id: 'row-1', date: '2024-01-01', amount: '1.000.000.000,00', description: 'Aporte bilionario', direction: 'in' },
+      ],
+    })
+
+    const [tx] = await db.transactions.toArray()
+
+    // Money Pattern: R$1.000.000.000,00 = 100.000.000.000 centavos — inteiro exato, sem drift
+    expect(tx.amountInUnits).toBe(100_000_000_000)
+    expect(Number.isInteger(tx.amountInUnits)).toBe(true)
+    expect(tx.direction).toBe('in')
+    expect(tx.currency).toBe('BRL')
+    expect(tx.precision).toBe(2)
+
+    // Invariante: id === fingerprint (content-addressed primary key)
+    expect(tx.id).toBe(tx.fingerprint)
+  })
+
+  it('falha explicitamente quando o hash do arquivo já existe', async () => {
     await addFile({
       id: 'existing-file',
       name: 'existente.csv',

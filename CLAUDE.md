@@ -1,131 +1,230 @@
-CLAUDE.md
+# CLAUDE.md — Organizador de Finanças
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-The focus is a local-first application based on privacy and clean architecture.
-STRICT BOUNDARIES (READ CAREFULLY)
+Guia de sobrevivência para Claude Code neste repositório.
+Aplicação **local-first** focada em privacidade e integridade de dados financeiros.
 
-You have limited write permissions to ensure the integrity of the data engine.
+---
 
-    READ-ONLY DIRECTORIES: src/domain/, src/db/, src/normalization/, src/pipeline/, src/importers/.
+## Status da Fase
 
-    Rule: NEVER alter calculation logic, DB schemas, or the import pipeline unless explicitly ordered by the user.
+| Fase | Status | Descrição |
+|---|---|---|
+| **0.1 — Engine** | ✅ Concluída | Pipeline de importação, Money Pattern, fingerprinting, 172 testes verdes |
+| **0.2 — UI** | 🔄 Em andamento | Interface React + Tailwind v4 + Framer Motion, hooks de dados, analytics |
+| **0.3 — Insights** | ⬜ Pendente | Agrupamento de gastos, relatórios, exportação |
 
-    WRITE-PERMITTED DIRECTORIES: src/components/, src/pages/, src/hooks/, src/analytics/.
+**Próximo foco:** Fase 0.2 — construir a interface de usuário consumindo a engine já blindada.
+Stack da UI: React 18 + TypeScript + Tailwind CSS v4 + Framer Motion. Componentes de UI base: Shadcn/ui (quando necessário). Dados via hooks com `useLiveQuery` (Dexie React Hooks).
 
-    Rule: Your primary role is to build the UI, the React hooks to consume data, and pure functions for analytics.
+---
 
-Commands
+## Fronteiras de Escrita (LEIA ANTES DE QUALQUER EDIÇÃO)
 
-pnpm dev          # start dev server
-pnpm build        # tsc + vite build
-pnpm test         # run all tests once (vitest run)
-pnpm test:watch   # run tests in watch mode
-Architecture
+### Diretórios READ-ONLY
+```
+src/domain/        ← tipos, constantes, fingerprint
+src/db/            ← schema Dexie, repositórios
+src/normalization/ ← amount, date, description, counterparty
+src/pipeline/      ← import.pipeline.ts (o maestro)
+src/importers/     ← parsers por banco (inter, nubank, generic)
+```
+**Regra:** NUNCA altere lógica de cálculo, schema do DB ou o pipeline de importação sem ordem explícita do usuário. Qualquer mudança aqui pode corromper dados históricos silenciosamente.
 
-React + TypeScript SPA. All persistence is local via IndexedDB (Dexie). No backend.
-Data flow
+### Diretórios WRITE-PERMITTED
+```
+src/components/    ← componentes React
+src/pages/         ← páginas / rotas
+src/hooks/         ← React hooks para consumir dados
+src/analytics/     ← funções puras de análise (summary, insights)
+src/utils/         ← utilitários de display (money.ts, formatters)
+```
+**Regra:** Seu papel principal é construir a UI, os hooks de dados e as funções de analytics. Nunca acesse o Dexie diretamente de um componente — use hooks.
 
-CSV file
--> csv.utils.ts          (raw parse via PapaParse)
--> parser (inter/nubank/generic)   (bank-specific -> StructuredImportTransaction[])
--> import.pipeline.ts    (normalize + deduplicate + persist)
--> IndexedDB (Dexie)
--> hooks (useTransactions, useFiles, ...)
--> React UI
-Key layers
+---
 
-    Domain types: src/domain/types.ts (All shared types)
+## Comandos
 
-    Domain constants: src/domain/constants.ts (Stop terms, own-transfer detection terms)
+```bash
+pnpm dev          # inicia o servidor de desenvolvimento (Vite)
+pnpm build        # tsc + vite build (verifica tipos + gera bundle)
+pnpm test         # executa a suíte completa uma vez (vitest run)
+pnpm test:watch   # modo watch para desenvolvimento de testes
+```
 
-    Fingerprinting: src/domain/fingerprint.ts (Deterministic dedup keys)
+### Regra de Ouro sobre testes
 
-    Normalization: src/normalization/ (amount.ts, date.ts, counterparty.ts)
+**Antes de qualquer commit que toque em `src/pipeline/`, `src/domain/`, `src/db/` ou `src/normalization/`:**
 
-    CSV utilities: src/importers/csv.utils.ts (Raw CSV parsing)
+```bash
+pnpm test   # todos os 172 testes DEVEM continuar verdes
+```
 
-    Parsers: src/importers/ (One file per bank. Output: StructuredImportTransaction[])
+Se algum teste quebrar, **não faça o commit**. Investigue e corrija a raiz do problema. Os testes de stress (`stress.test.ts`) cobrem atomicidade, race conditions e precisão de centavos — uma falha ali indica corrupção potencial de dados reais.
 
-    Import pipeline: src/pipeline/import.pipeline.ts (Orchestrates normalization, dedup, DB write)
+---
 
-    DB / Repos: src/db/ (Dexie class, schemas, and Typed DB access)
+## Fluxo de Dados
 
-    Hooks: src/hooks/ (React data hooks - your main job)
+```
+Arquivo CSV
+  → csv.utils.ts           (parse raw via PapaParse — stripBom, skipEmptyLines)
+  → parser por banco        (inter/nubank/generic → StructuredImportTransaction[])
+  → import.pipeline.ts      (normalize → deduplicate → persist atômico)
+  → IndexedDB (Dexie)
+  → hooks (useTransactions, useFiles, useTransactionRepository, ...)
+  → React UI
+```
 
-    Analytics: src/analytics/ (summary.ts, counterparties.ts, insights.ts)
+**Camadas-chave:**
 
-Money Pattern (CRITICAL — read before touching any monetary value)
+| Camada | Arquivo(s) | Responsabilidade |
+|---|---|---|
+| Tipos do domínio | `src/domain/types.ts` | Todos os tipos compartilhados |
+| Constantes | `src/domain/constants.ts` | Stop terms, own-transfer terms |
+| Fingerprinting | `src/domain/fingerprint.ts` | Chaves de dedup determinísticas |
+| Normalização | `src/normalization/` | amount, date, description, counterparty |
+| CSV utils | `src/importers/csv.utils.ts` | Parse raw, stripBom, headers |
+| Parsers | `src/importers/` | Um arquivo por banco → `StructuredImportTransaction[]` |
+| Pipeline | `src/pipeline/import.pipeline.ts` | Orquestra normalize + dedup + write |
+| Repositórios | `src/db/repositories/` | Acesso tipado ao Dexie — nunca use `db` diretamente na UI |
+| Hooks | `src/hooks/` | `useLiveQuery` + lógica de estado para a UI |
+| Analytics | `src/analytics/` | Funções puras: `summary.ts`, `counterparties.ts`, `insights.ts` |
 
-    NEVER store monetary values as floats. 0.1 + 0.2 === 0.30000000000000004 in JavaScript.
-    Over 10,000 transactions, float drift can diverge by several reais in aggregate sums.
+---
 
-    Transaction.amountInUnits (number, required) — always a POSITIVE INTEGER in the smallest
-    currency unit (centavos for BRL, pence for GBP, cents for USD).
-    Formula: amountInUnits = Math.round(floatValue * 10^precision)
+## Regras de Ouro do Domínio
 
-    Transaction.currency (string, required) — ISO 4217 code (e.g. 'BRL', 'USD').
-    NEVER sum transactions of different currencies. Use money.add() which enforces this.
-    Current hardcoded value: 'BRL' for all Inter/Nubank parsers.
+### 1. Como adicionar novas transações (SEMPRE via pipeline)
 
-    Transaction.precision (number, required) — decimal places for the currency.
-    BRL=2, USD=2, JPY=0, KWD=3. Default: 2.
+**Nunca insira transações diretamente no Dexie de fora do pipeline.**
+A única forma correta de persistir transações é via `runImportPipeline`:
 
-    Display/format helpers are in src/utils/money.ts:
-      toUnits(float, precision) — convert from CSV float to integer units (use in parsers)
-      formatMoney(units, currency) — format with Intl.NumberFormat (use in UI)
-      toDisplay(units, precision) — plain decimal string (use for logs/export)
-      add(m1, m2) — safe addition that validates currency and precision match
+```ts
+// ✅ CORRETO — atomicidade, deduplicação, hash guard, fingerprint garantidos
+const result = await runImportPipeline({ file, transactions })
 
-Domain invariants (DO NOT BREAK)
+// ❌ ERRADO — bypassa dedup, hash guard, possibilita duplicatas e IDs inválidos
+await db.transactions.add({ id: 'meu-id', ... })
+```
 
-    Transaction.amount is ALWAYS positive. Direction ('in' | 'out') carries the financial meaning.
+`runImportPipeline` garante:
+- Hash guard dentro da transação (proteção contra race condition)
+- Deduplicação por fingerprint
+- `id === fingerprint` (content-addressed primary key)
+- Rollback automático se qualquer etapa falhar
 
-    fingerprint is an FNV-1a hash of (utcDayTimestamp | amount | direction | normalizedDescription).
+### 2. Money Pattern — Precisão de Centavos (CRÍTICO)
 
-    Transaction.id MUST always equal Transaction.fingerprint. This is the content-addressed primary key.
-    Reason: guarantees global uniqueness across files, prevents ConstraintError on bulkAdd, and makes
-    deduplication correct by construction. Never set id from a parser row-id or any other source.
+**NUNCA armazene valores monetários como float.**
 
-    fingerprint = FNV-1a hash of (utcDayTimestamp | amount | direction | normalizedDescription | sourceRowId).
-    The sourceRowId (parser row identifier) is MANDATORY in the fingerprint since v0.2.
-    Reason: two identical purchases on the same day (ex: two coffees R$5.00) MUST be two distinct records.
-    Without sourceRowId, the second coffee is silently lost and the balance becomes wrong.
+```ts
+// ❌ PROIBIDO — 0.1 + 0.2 = 0.30000000000000004 em JS
+transaction.amount = 19.99
 
-    Transaction.sourceRowId (string, required) stores the original parser row identifier.
-    Transaction.descriptionNormalized (string, required) stores the cleaned description for insight clustering.
-    Both fields are mandatory on all new Transaction records — never omit them.
+// ✅ CORRETO — inteiro exato em centavos, sem drift binário
+transaction.amountInUnits = Math.round(19.99 * 100)  // → 1999
+```
 
-    descriptionNormalized is generated by normalizeDescription() in src/normalization/description.ts.
-    It removes: emoji, transaction codes (3+ digit sequences), separators, and non-alphanumeric noise.
-    It normalizes: accents → stripped, case → lowercase, whitespace → single space.
-    Example: "PADARIA ALFA 123" and "Padaria Alfa 456" both → "padaria alfa" (same cluster key).
-    This field is the foundation of the insights engine — do not skip it or hardcode it.
+| Campo | Tipo | Regra |
+|---|---|---|
+| `amountInUnits` | `number` (inteiro positivo) | Sempre em centavos. `Math.round(float * 10^precision)` |
+| `currency` | `string` ISO 4217 | `'BRL'` para Inter/Nubank. NUNCA some moedas diferentes |
+| `precision` | `number` | `2` para BRL/USD, `0` para JPY, `3` para KWD |
 
-    Dates are stored as UTC-midnight timestamps (dateTs) and ISO strings (date: yyyy-MM-dd).
+**Helpers em `src/utils/money.ts`:**
+```ts
+toUnits(float, precision)       // CSV float → inteiro centavos (use nos parsers)
+formatMoney(units, currency)    // Intl.NumberFormat para display na UI
+toDisplay(units, precision)     // String decimal para logs/export
+add(m1, m2)                     // Soma segura que valida moeda e precisão
+```
 
-    ownTransfer follows a conservative heuristic: prefer undefined over false when confidence is low.
+Provas de precisão: `amount.test.ts` e `stress.test.ts` (seção 10) cobrem R$0,01, R$19,99, R$1,11, R$2,22 e R$1 bilhão.
 
-    Every DB write in runImportPipeline MUST run inside db.transaction('rw', [db.files, db.transactions], ...).
-    This includes the hash guard (getFileByHash) and the deduplication read (getExistingFingerprints).
-    Reason: atomicity + race-condition safety. A hash check outside the transaction is not a guard.
+### 3. Fingerprint e ID de Transação
 
-    runImportPipeline MUST return the full ImportResult shape: { fileId, totalCount, newCount, duplicateCount }.
-    The UI depends on newCount and duplicateCount to give precise feedback to the user.
-    Never simplify this to a bare count.
+```
+fingerprint = FNV-1a( utcDayTimestamp | amountInUnits | direction | description | sourceRowId )
+id          = fingerprint   ← SEMPRE. Nunca outro valor.
+```
 
-    deleteFile(fileId) in files.repo.ts is the ONLY correct way to remove a file and its transactions.
-    It runs both deletes atomically inside a db.transaction. Never delete files and transactions separately.
+- `Transaction.id` **deve** ser igual a `Transaction.fingerprint`. É o primary key content-addressed do IndexedDB.
+- `sourceRowId` é obrigatório no fingerprint: dois cafés de R$5,00 no mesmo dia têm `sourceRowId` diferentes → fingerprints diferentes → dois registros legítimos.
+- Sem `sourceRowId`, o segundo café seria silenciosamente descartado como duplicata.
 
-UI/UX & Code Style Guidelines
+### 4. Exclusão em Cascata
 
-    Use Tailwind CSS for styling.
+```ts
+// ✅ ÚNICO caminho correto — atômico, sem resíduos
+await deleteFile(fileId)  // de src/db/repositories/files.repo.ts
 
-    Prioritize "Data Quality over Interface" (Rule P-04).
+// ❌ PROIBIDO — deixa transações órfãs se uma das operações falhar
+await db.files.delete(fileId)
+await db.transactions.where('fileId').equals(fileId).delete()
+```
 
-    Always implement loading states and clear empty states for data components.
+`deleteFile` executa ambos os deletes dentro de `db.transaction('rw', [db.files, db.transactions], ...)`.
 
-    For transaction lists, prepare for pagination or virtualization if volume is high (RNF-008).
+### 5. Dois campos de descrição com propósitos distintos
 
-    Strict TypeScript (avoid any).
+| Campo | Gerado por | Remove | Mantém | Uso |
+|---|---|---|---|---|
+| `description` | Parser (raw) | Nada | Tudo, incluindo emoji e códigos | Fingerprint, armazenamento, display |
+| `descriptionNormalized` | `normalizeDescription()` | Emoji, 3+ dígitos, `[^a-z0-9\s]` | Palavras-chave do estabelecimento | Clustering, insights, busca |
 
-    Use functional components with hooks.
+```
+"PADARIA ALFA 123456"  →  descriptionNormalized: "padaria alfa"
+"Padaria Alfa 789012"  →  descriptionNormalized: "padaria alfa"  ← mesmo cluster
+                       →  fingerprints DIFERENTES (sourceRowId e código distintos)
+```
+
+### 6. Segurança por Construção
+
+- **XSS:** `description` vai para IndexedDB como string inerte. Na UI, é renderizada como JSX text node (React escapa automaticamente). `descriptionNormalized` remove `<>()` via `[^a-z0-9\s]`.
+- **Race Condition:** hash guard e deduplicação ficam DENTRO da `db.transaction('rw', ...)`. Uma verificação fora da transação não é um guard.
+- **Float drift:** `Math.round` no pipeline garante que mesmo `1.11 × 100 = 111.00000000000001` vira `111`.
+
+---
+
+## Invariantes do Domínio (NÃO QUEBRE)
+
+1. `Transaction.amountInUnits` — inteiro positivo. Direction `'in' | 'out'` carrega o sinal financeiro.
+2. `Transaction.id === Transaction.fingerprint` — sempre. Nunca use row-id do parser como id.
+3. Todo write em `runImportPipeline` DEVE estar dentro de `db.transaction('rw', [db.files, db.transactions], ...)`.
+4. `runImportPipeline` DEVE retornar `{ fileId, totalCount, newCount, duplicateCount }` — nunca simplifique.
+5. `deleteFile(fileId)` é o ÚNICO caminho correto para remover um arquivo e suas transações.
+6. Datas armazenadas como timestamp UTC-meia-noite (`dateTs`) e string ISO (`date: 'yyyy-MM-dd'`).
+7. `ownTransfer` segue heurística conservadora: prefira `undefined` a `false` quando a confiança for baixa.
+8. `descriptionNormalized` gerado por `normalizeDescription()` — nunca hardcode, nunca omita.
+9. `sourceRowId` obrigatório em todo novo `Transaction` — campo mandatório desde v0.2.
+
+---
+
+## Diretrizes de UI/UX e Código (Fase 0.2)
+
+- **Tailwind CSS v4** — design tokens em `@theme` no `index.css` (não em `tailwind.config.js`)
+- **Framer Motion** — `AnimatePresence` para toasts, `spring` para cards, `layout` para listas
+- **`@tanstack/react-virtual`** — virtualizar listas com mais de 100 transações (`ROW_HEIGHT = 44px`)
+- **React.memo** — componentes de linha de tabela (`TransactionRow`, `SummaryCard`)
+- **TypeScript estrito** — sem `any`. Todos os tipos de domínio em `src/domain/types.ts`
+- **Componentes funcionais com hooks** — nunca classes
+- **Loading states e empty states** — obrigatórios em todo componente que lê dados assíncronos
+- **Nunca acesse `db` diretamente em componentes** — use os hooks de repositório
+
+### Hook pattern correto
+
+```ts
+// ✅ Componente consome apenas o hook
+const { transactions, summary, deleteByFile } = useTransactionRepository()
+
+// ❌ Componente acessa Dexie diretamente
+const txs = await db.transactions.toArray()
+```
+
+---
+
+## Documentação Técnica
+
+- `docs/testes.md` — Arquitetura dos 172 testes: Money Pattern, Unicode/XSS, Race Conditions, Atomicidade, Cascade Delete. **Leia antes de adicionar testes.**
+- `docs/arquitetura-consolidada-v0.1.md` — Decisões de arquitetura da Fase 0.1 com justificativas.
+- `docs/requisitos_finais_v0.1.md` — Requisitos funcionais e não-funcionais definidos.

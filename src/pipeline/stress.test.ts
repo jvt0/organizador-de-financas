@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Direction } from '../domain/types'
 import { db } from '../db/db'
-import { getFileByHash } from '../db/repositories/files.repo'
+import { deleteFile, getFileByHash } from '../db/repositories/files.repo'
 import { findAll } from '../db/repositories/transactions.repo'
 import { toDisplay } from '../utils/money'
 import { runImportPipeline, type StructuredImportTransaction } from './import.pipeline'
@@ -44,6 +44,10 @@ describe('Stress Tests: Pipeline de Importação', () => {
   beforeEach(async () => {
     await db.transactions.clear()
     await db.files.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -498,6 +502,242 @@ describe('Stress Tests: Pipeline de Importação', () => {
       // 10 + 20 = 30 centavos — sem drift de ponto flutuante
       expect(soma).toBe(30)
       expect(toDisplay(soma)).toBe('0.30')
+    })
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 8. SEGURANÇA — XSS Guard e Exclusão em Cascata
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('Segurança: XSS Guard e exclusão em cascata', () => {
+    it('XSS Guard: descrição maliciosa é armazenada como texto puro e descriptionNormalized remove tags HTML', async () => {
+      const XSS_DESC = '<script>alert(1)</script>'
+
+      await runImportPipeline({
+        file: makeFileInput('xss-file', 'xss-hash'),
+        transactions: [makeTx({ id: 'row-xss', description: XSS_DESC })],
+      })
+
+      const [tx] = await findAll()
+
+      // description raw preservada — não é executada por ser string inerte no IndexedDB
+      expect(tx.description).toBe(XSS_DESC)
+
+      // descriptionNormalized não contém caracteres HTML — normalizeDescription limpa via [^a-z0-9\s]
+      expect(tx.descriptionNormalized).not.toContain('<')
+      expect(tx.descriptionNormalized).not.toContain('>')
+      expect(tx.descriptionNormalized).not.toContain('(')
+      // '/' vira espaço na etapa de separadores; '<', '>', '(' e ')' viram espaços em [^a-z0-9\s]
+      expect(tx.descriptionNormalized).toBe('script alert 1 script')
+
+      // Invariante: id === fingerprint — preservado mesmo com descrição adversária
+      expect(tx.id).toBe(tx.fingerprint)
+
+      // Invariante Money Pattern: amountInUnits permanece inteiro positivo
+      expect(Number.isInteger(tx.amountInUnits)).toBe(true)
+      expect(tx.amountInUnits).toBeGreaterThan(0)
+    })
+
+    it('Integridade de Exclusão: deleteFile remove arquivo e todas as transações atomicamente', async () => {
+      // 1. Importa arquivo com 3 transações
+      const result = await runImportPipeline({
+        file: makeFileInput('delete-target', 'delete-hash'),
+        transactions: [
+          makeTx({ id: 'row-1', amount: 100, description: 'Pagamento A' }),
+          makeTx({ id: 'row-2', amount: 200, description: 'Pagamento B' }),
+          makeTx({ id: 'row-3', amount: 300, description: 'Pagamento C' }),
+        ],
+      })
+
+      // Estado pós-importação: 1 arquivo e 3 transações no banco
+      expect(result.newCount).toBe(3)
+      expect(await db.files.count()).toBe(1)
+      expect(await db.transactions.count()).toBe(3)
+
+      // 2. Exclusão em cascata via deleteFile (único caminho correto, conforme CLAUDE.md)
+      await deleteFile('delete-target')
+
+      // 3. Banco zerado — arquivo e transações removidos em transação atômica única
+      expect(await db.files.count()).toBe(0)
+      expect(await db.transactions.count()).toBe(0)
+    })
+
+    it('Exclusão Parcial: deleteFile de um arquivo não afeta transações de outro arquivo', async () => {
+      // Importa dois arquivos distintos
+      await runImportPipeline({
+        file: makeFileInput('file-a', 'hash-a'),
+        transactions: [makeTx({ id: 'row-1', amount: 50, description: 'Tx do arquivo A' })],
+      })
+      await runImportPipeline({
+        file: makeFileInput('file-b', 'hash-b'),
+        transactions: [makeTx({ id: 'row-1', amount: 75, description: 'Tx do arquivo B' })],
+      })
+
+      expect(await db.transactions.count()).toBe(2)
+
+      // Deleta apenas o arquivo A
+      await deleteFile('file-a')
+
+      // Arquivo A e sua transação foram removidos
+      expect(await db.files.count()).toBe(1)
+      expect(await db.transactions.count()).toBe(1)
+
+      // A transação sobrevivente pertence ao arquivo B
+      const [remaining] = await findAll()
+      expect(remaining.fileId).toBe('file-b')
+      expect(remaining.amountInUnits).toBe(7500) // R$75,00 = 7500 centavos
+    })
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 9. UNICODE & EMOJI — Integridade de dados end-to-end
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('Unicode e Emoji: integridade de dados end-to-end', () => {
+    it('description com unicode (japonês, árabe) é preservada exatamente no banco', async () => {
+      const UNICODE_DESC = 'Transferência 高木ゆうこ → محمد علي'
+
+      await runImportPipeline({
+        file: makeFileInput('unicode-file', 'unicode-hash'),
+        transactions: [makeTx({ id: 'row-uni', description: UNICODE_DESC })],
+      })
+
+      const [tx] = await findAll()
+
+      // description raw: preservada byte a byte no IndexedDB
+      expect(tx.description).toBe(UNICODE_DESC)
+
+      // descriptionNormalized: NFD + [^a-z0-9\s] remove chars não-ASCII
+      // Apenas 'transferencia' (sem acento) e espaços sobrevivem
+      expect(tx.descriptionNormalized).not.toContain('高木')
+      expect(tx.descriptionNormalized).not.toContain('محمد')
+      expect(tx.descriptionNormalized).toBe('transferencia')
+
+      // Invariante: id === fingerprint preservado mesmo com unicode no payload
+      expect(tx.id).toBe(tx.fingerprint)
+    })
+
+    it('description com emoji é preservada no banco e removida do descriptionNormalized', async () => {
+      const EMOJI_DESC = '☕ Cafezinho na padaria 🥐'
+
+      await runImportPipeline({
+        file: makeFileInput('emoji-file', 'emoji-hash'),
+        transactions: [makeTx({ id: 'row-emoji', description: EMOJI_DESC })],
+      })
+
+      const [tx] = await findAll()
+
+      // raw preservada com emoji
+      expect(tx.description).toBe(EMOJI_DESC)
+
+      // descriptionNormalized: emoji removidos pela etapa de emoji do normalizeDescription
+      expect(tx.descriptionNormalized).not.toContain('☕')
+      expect(tx.descriptionNormalized).not.toContain('🥐')
+      expect(tx.descriptionNormalized).toBe('cafezinho na padaria')
+    })
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 10. FLOAT IEEE 754 — Limites de representação binária
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('Float IEEE 754: Math.round elimina drift binário em amountInUnits', () => {
+    it('R$0,01 (valor mínimo BRL) → 1 centavo exato, sem arredondamento errado', async () => {
+      await runImportPipeline({
+        file: makeFileInput('cent-file', 'cent-hash'),
+        transactions: [makeTx({ id: 'row-1', amount: '0,01', direction: 'in' })],
+      })
+      const [tx] = await findAll()
+      expect(tx.amountInUnits).toBe(1)
+      expect(Number.isInteger(tx.amountInUnits)).toBe(true)
+    })
+
+    it('R$19,99 — drift clássico: 19.99 × 100 = 1998.9999...98 → Math.round → 1999', async () => {
+      await runImportPipeline({
+        file: makeFileInput('1999-file', '1999-hash'),
+        transactions: [makeTx({ id: 'row-1', amount: '19,99', direction: 'out' })],
+      })
+      const [tx] = await findAll()
+      expect(tx.amountInUnits).toBe(1999)
+    })
+
+    it('R$1,11 — drift binário: 1.11 × 100 = 111.00000000000001 → Math.round → 111', async () => {
+      await runImportPipeline({
+        file: makeFileInput('111-file', '111-hash'),
+        transactions: [makeTx({ id: 'row-1', amount: '1,11', direction: 'in' })],
+      })
+      const [tx] = await findAll()
+      expect(tx.amountInUnits).toBe(111)
+    })
+
+    it('R$2,22 — drift binário: 2.22 × 100 = 222.00000000000003 → Math.round → 222', async () => {
+      await runImportPipeline({
+        file: makeFileInput('222-file', '222-hash'),
+        transactions: [makeTx({ id: 'row-1', amount: '2,22', direction: 'out' })],
+      })
+      const [tx] = await findAll()
+      expect(tx.amountInUnits).toBe(222)
+    })
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 11. RACE CONDITION AVANÇADA — deleteFile vs runImportPipeline simultâneos
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('Race Condition avançada: deleteFile e runImportPipeline simultâneos', () => {
+    it('banco termina em estado consistente quando delete e import do mesmo conteúdo correm em paralelo', async () => {
+      // Setup: arquivo-a pré-importado com 3 transações
+      const txs = [
+        makeTx({ id: 'row-1', amount: 100, description: 'Tx Alpha' }),
+        makeTx({ id: 'row-2', amount: 200, description: 'Tx Beta' }),
+        makeTx({ id: 'row-3', amount: 300, description: 'Tx Gamma' }),
+      ]
+      await runImportPipeline({ file: makeFileInput('file-a', 'hash-a'), transactions: txs })
+      expect(await db.transactions.count()).toBe(3)
+
+      // Race: deletar file-a e importar file-b (mesmo conteúdo, hash diferente) simultaneamente
+      await Promise.allSettled([
+        deleteFile('file-a'),
+        runImportPipeline({ file: makeFileInput('file-b', 'hash-b'), transactions: txs }),
+      ])
+
+      // Invariante: exatamente 1 arquivo no banco (file-b sempre ganha, file-a sempre some)
+      expect(await db.files.count()).toBe(1)
+      const [survivingFile] = await db.files.toArray()
+      expect(survivingFile.id).toBe('file-b')
+
+      // Invariante de consistência referencial: toda transação pertence ao arquivo sobrevivente
+      const remainingTxs = await findAll()
+      for (const tx of remainingTxs) {
+        expect(tx.fileId).toBe('file-b')
+      }
+
+      // Contagem consistente: 0 (import bloqueou tudo por dupl.) ou 3 (delete venceu primeiro)
+      expect([0, 3]).toContain(remainingTxs.length)
+    })
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 12. ESCRITAS PARALELAS — Resistência a deadlock
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('Escritas paralelas: 5 importações simultâneas sem deadlock', () => {
+    it('5 arquivos distintos importados em paralelo — todas resolvem, banco consistente', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          runImportPipeline({
+            file: makeFileInput(`parallel-${i}`, `parallel-hash-${i}`),
+            transactions: [
+              makeTx({ id: 'row-1', amount: (i + 1) * 100, description: `Pagamento paralelo ${i} A` }),
+              makeTx({ id: 'row-2', amount: (i + 1) * 200, description: `Pagamento paralelo ${i} B` }),
+            ],
+          }),
+        ),
+      )
+
+      // Todas as 5 importações devem ter resolvido com sucesso (sem deadlock)
+      expect(results).toHaveLength(5)
+      expect(results.every(r => r.newCount === 2)).toBe(true)
+      expect(results.every(r => r.duplicateCount === 0)).toBe(true)
+
+      // Estado final: 5 arquivos × 2 transações = 10 registros únicos
+      expect(await db.files.count()).toBe(5)
+      expect(await db.transactions.count()).toBe(10)
     })
   })
 })
