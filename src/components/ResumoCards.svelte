@@ -1,15 +1,9 @@
 <script lang="ts">
-  interface Card {
-    label: string
-    value: string
-    colorClass: string
-  }
-
   interface Props {
     totalTransacoes: number
-    volume: number
+    volume:   number
     entradas: number
-    saidas: number
+    saidas:   number
     arquivos: number
   }
 
@@ -22,16 +16,12 @@
     })
   }
 
-  function fmtN(n: number): string {
-    return n.toLocaleString('pt-BR')
-  }
-
-  const cards: Card[] = $derived([
-    { label: 'Total transacoes', value: fmtN(totalTransacoes), colorClass: 'cv-blue'   },
-    { label: 'Volume total',     value: fmt(volume),           colorClass: 'cv-yellow' },
-    { label: 'Total entradas',   value: fmt(entradas),         colorClass: 'cv-green'  },
-    { label: 'Total saidas',     value: fmt(saidas),           colorClass: 'cv-red'    },
-    { label: 'Arquivos',         value: fmtN(arquivos),        colorClass: 'cv-purple' },
+  const cards = $derived([
+    { label: 'Total transacoes', value: totalTransacoes.toLocaleString('pt-BR'), colorClass: 'cv-blue'   },
+    { label: 'Volume total',     value: fmt(volume),                             colorClass: 'cv-yellow' },
+    { label: 'Total entradas',   value: fmt(entradas),                           colorClass: 'cv-green'  },
+    { label: 'Total saidas',     value: fmt(saidas),                             colorClass: 'cv-red'    },
+    { label: 'Arquivos',         value: arquivos.toLocaleString('pt-BR'),        colorClass: 'cv-purple' },
   ])
 </script>
 
@@ -43,3 +33,36 @@
     </div>
   {/each}
 </div>
+
+<style>
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+    gap: 11px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 15px 17px;
+  }
+  .card-label {
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    margin-bottom: 5px;
+  }
+  .card-value {
+    font-size: 19px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+  }
+  .cv-yellow { color: var(--accent);  }
+  .cv-green  { color: var(--green);   }
+  .cv-red    { color: var(--red);     }
+  .cv-blue   { color: var(--blue);    }
+  .cv-purple { color: var(--purple);  }
+</style>

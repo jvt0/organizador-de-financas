@@ -1,10 +1,10 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [svelte(), tailwindcss()],
   test: {
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
