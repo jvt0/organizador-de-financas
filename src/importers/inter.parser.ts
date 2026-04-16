@@ -41,6 +41,6 @@ export function parseInterCsv(csvText: string, fileName?: string): StructuredImp
         linhaOriginal: row.join(';'),
         indexNoArquivo: headerIndex + index + 1,
         arquivoFonte: fileName
-      }
+      } as unknown as Record<string, string>
     }));
 }

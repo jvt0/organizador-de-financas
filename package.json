@@ -21,6 +21,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.2.2",
+    "@types/papaparse": "^5.5.2",
     "fake-indexeddb": "^6.2.5",
     "svelte": "^5.55.4",
     "tailwindcss": "^4.2.2",

@@ -26,12 +26,22 @@
   function handleDrop(e: DragEvent) {
     e.preventDefault()
     dragOver = false
-    if (e.dataTransfer?.files?.length) onfiles(e.dataTransfer.files)
+    if (e.dataTransfer?.files?.length) {
+      for (const file of Array.from(e.dataTransfer.files)) {
+        console.log('[DEBUG] 1. Arquivo recebido na UI (drop):', file.name)
+      }
+      onfiles(e.dataTransfer.files)
+    }
   }
 
   function handleFileChange(e: Event) {
     const input = e.currentTarget as HTMLInputElement
-    if (input.files?.length) onfiles(input.files)
+    if (input.files?.length) {
+      for (const file of Array.from(input.files)) {
+        console.log('[DEBUG] 1. Arquivo recebido na UI (input):', file.name)
+      }
+      onfiles(input.files)
+    }
   }
 </script>
 

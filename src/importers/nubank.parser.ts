@@ -21,8 +21,8 @@ export function parseNubankCsv(csvText: string, fileName?: string): StructuredIm
       bankName: 'Nubank',
       raw: {
         linhaOriginal: row.join(','),
-        indexNoArquivo: index + 1, // +1 porque pulamos o header
+        indexNoArquivo: index + 1,
         arquivoFonte: fileName
-      }
+      } as unknown as Record<string, string>
     }));
 }

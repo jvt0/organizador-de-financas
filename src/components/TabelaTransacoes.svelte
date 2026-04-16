@@ -99,6 +99,12 @@
       maximumFractionDigits: 2,
     })
   }
+
+  /** Converte ISO 'yyyy-MM-dd' para 'dd/MM/yyyy'. Retorna a string original se já estiver em outro formato. */
+  function fmtDate(iso: string): string {
+    const [y, m, d] = iso.split('-')
+    return d && m && y ? `${d}/${m}/${y}` : iso
+  }
 </script>
 
 <!-- ── Snippets reutilizáveis ───────────────────────────────── -->
@@ -225,7 +231,7 @@
         <tbody>
           {#each pageRows as tx (`${tx.data}-${tx.destinatario}-${tx.valor}`)}
             <tr class:tr-own={tx.propria}>
-              <td class="mono">{tx.data}</td>
+              <td class="mono">{fmtDate(tx.data)}</td>
               <td>
                 {tx.destinatario}
                 {#if tx.propria}<span class="badge b-own" style="margin-left:6px">própria</span>{/if}
