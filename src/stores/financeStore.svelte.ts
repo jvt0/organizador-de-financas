@@ -12,10 +12,12 @@ import type { ImportedFile, SourceType, Transaction } from '../domain/types'
 
 /** Representação da transação adaptada para a camada de View. */
 export interface TransacaoView {
-  data: string        // ISO 'yyyy-MM-dd' — mantido para ordenação correta por localeCompare
+  id: string                    // fingerprint da transação — chave única para o {#each} do Svelte
+  data: string                  // ISO 'yyyy-MM-dd' — mantido para ordenação correta por localeCompare
+  tipo: 'entrada' | 'saida'    // derivado de tx.direction para exibição na coluna Tipo
   destinatario: string
   descricao: string
-  valor: number       // float com sinal: positivo = entrada, negativo = saída
+  valor: number                 // float com sinal: positivo = entrada, negativo = saída
   banco_origem: string
   propria: boolean
 }
@@ -58,7 +60,9 @@ function detectSource(csvText: string): SourceType | null {
 function txToView(tx: Transaction): TransacaoView {
   const sign = tx.direction === 'in' ? 1 : -1
   return {
+    id:           tx.id,                                // fingerprint — chave única para o Svelte {#each}
     data:         tx.date,                              // ISO yyyy-MM-dd
+    tipo:         tx.direction === 'in' ? 'entrada' : 'saida',
     destinatario: tx.counterparty ?? tx.description,
     descricao:    tx.description,
     valor:        sign * toDecimal(tx.amountInUnits, tx.precision),

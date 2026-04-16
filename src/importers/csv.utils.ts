@@ -1,4 +1,5 @@
 import Papa, { type ParseError, type ParseMeta } from 'papaparse'
+export { sanitizeCounterparty } from '../utils/sanitize'
 
 export type CsvRow = string[]
 
@@ -31,6 +32,7 @@ export function parseCsvText(text: string): CsvParseResult {
 export const sanitizeDescription = (text: string): string => {
   return text.replace(/\s+/g, ' ').trim();
 };
+
 
 export function normalizeCell(value: unknown): string {
   if (value == null) {

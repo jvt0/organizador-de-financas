@@ -1,6 +1,8 @@
 <script lang="ts">
   export interface Transacao {
+    id: string
     data: string
+    tipo: 'entrada' | 'saida'
     destinatario: string
     descricao: string
     valor: number
@@ -222,6 +224,7 @@
         <thead>
           <tr>
             <th>Data</th>
+            <th>Tipo</th>
             <th>Destinatario</th>
             <th>Descricao</th>
             <th>Banco</th>
@@ -229,9 +232,10 @@
           </tr>
         </thead>
         <tbody>
-          {#each pageRows as tx (`${tx.data}-${tx.destinatario}-${tx.valor}`)}
+          {#each pageRows as tx (tx.id)}
             <tr class:tr-own={tx.propria}>
               <td class="mono">{fmtDate(tx.data)}</td>
+              <td><span class="badge tipo-{tx.tipo}">{tx.tipo === 'entrada' ? 'ENTRADA' : 'SAÍDA'}</span></td>
               <td>
                 {tx.destinatario}
                 {#if tx.propria}<span class="badge b-own" style="margin-left:6px">própria</span>{/if}
@@ -396,9 +400,11 @@
     font-weight: 600;
     white-space: nowrap;
   }
-  .b-nu    { background: #8c56e618; color: #b892ff; border: 1px solid #8c56e640; }
-  .b-inter { background: #ff6b2218; color: #ff9966; border: 1px solid #ff6b2240; }
-  .b-own   { background: #f0c04018; color: var(--accent); border: 1px solid #f0c04050; }
+  .b-nu         { background: #8c56e618; color: #b892ff;        border: 1px solid #8c56e640; }
+  .b-inter      { background: #ff6b2218; color: #ff9966;        border: 1px solid #ff6b2240; }
+  .b-own        { background: #f0c04018; color: var(--accent);  border: 1px solid #f0c04050; }
+  .tipo-entrada { background: #4caf7d18; color: var(--green);   border: 1px solid #4caf7d40; }
+  .tipo-saida   { background: #e05c5c18; color: var(--red);     border: 1px solid #e05c5c40; }
 
   /* ── Paginação ── */
   .pagination {

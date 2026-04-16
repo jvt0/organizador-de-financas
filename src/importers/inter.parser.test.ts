@@ -13,8 +13,8 @@ Data Lançamento;Histórico;Descrição;Valor;Saldo
     const result = parseInterCsv(csvInter, 'inter_teste.csv');
 
     expect(result).toHaveLength(2);
-    expect(result[0].amount).toBe('84,00');
-    expect(result[1].amount).toBe('-1.900,00');
+    expect(result[0].amount).toBe('84.00');
+    expect(result[1].amount).toBe('-1900.00');
     // Verifica a concatenação sénior que fizemos (Histórico + Descrição)
     expect(result[1].description).toBe('Pix enviado Luccius Magno');
   });

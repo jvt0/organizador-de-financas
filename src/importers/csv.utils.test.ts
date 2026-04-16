@@ -6,6 +6,7 @@ import {
   isCsvEmpty,
   normalizeCell,
   parseCsvText,
+  sanitizeCounterparty,
   stripBom,
 } from './csv.utils'
 
@@ -150,5 +151,66 @@ describe('isCsvEmpty', () => {
   it('indica quando nao ha linhas', () => {
     expect(isCsvEmpty([])).toBe(true)
     expect(isCsvEmpty([['header']])).toBe(false)
+  })
+})
+
+describe('sanitizeCounterparty', () => {
+  it('remove prefixo "Pix enviado - " e retorna o nome', () => {
+    expect(sanitizeCounterparty('Pix enviado - Jose')).toBe('Jose')
+  })
+
+  it('remove prefixo "Pix recebido - " case-insensitive', () => {
+    expect(sanitizeCounterparty('PIX RECEBIDO - Maria Silva')).toBe('Maria Silva')
+  })
+
+  it('remove prefixo "Pix - "', () => {
+    expect(sanitizeCounterparty('Pix - Joao')).toBe('Joao')
+  })
+
+  it('remove prefixo "Transferência recebida pelo Pix - " e descarta CPF/banco', () => {
+    expect(sanitizeCounterparty(
+      'Transferência recebida pelo Pix - CLIENTE FICTICIO A - •••.000.000-•• - BCO C6 S.A.'
+    )).toBe('CLIENTE FICTICIO A')
+  })
+
+  it('remove prefixo "Transferência Recebida - " (sem "pelo Pix")', () => {
+    expect(sanitizeCounterparty(
+      'Transferência Recebida - Cliente Ficticio B - •••.000.000-•• - NU PAGAMENTOS'
+    )).toBe('Cliente Ficticio B')
+  })
+
+  it('remove prefixo "Transferência enviada pelo Pix - " com parentético final', () => {
+    expect(sanitizeCounterparty(
+      'Transferência enviada pelo Pix - CLIENTE FICTICIO C (Transferência enviada)'
+    )).toBe('CLIENTE FICTICIO C')
+  })
+
+  it('remove prefixo "Reembolso recebido pelo Pix - "', () => {
+    expect(sanitizeCounterparty(
+      'Reembolso recebido pelo Pix - 99 TECNOLOGIA LTDA - 18.033.552/0001-61'
+    )).toBe('99 TECNOLOGIA LTDA')
+  })
+
+  it('remove prefixo "Pagamento efetuado - "', () => {
+    expect(sanitizeCounterparty('Pagamento efetuado - Padaria Alfa')).toBe('Padaria Alfa')
+  })
+
+  it('colapsa espacos internos mas preserva nome com hifen interno (ex: Ana-Maria)', () => {
+    expect(sanitizeCounterparty('Pix enviado - Ana-Maria   da Silva')).toBe('Ana-Maria da Silva')
+  })
+
+  it('nao altera nome limpo do Inter (campo descricao ja isolado)', () => {
+    expect(sanitizeCounterparty('Bruno H Rodrigues')).toBe('Bruno H Rodrigues')
+  })
+
+  it('colapsa espacos excessivos de nomes de merchants do Inter', () => {
+    expect(sanitizeCounterparty('Acai Do Alto           Salvador      Bra'))
+      .toBe('Acai Do Alto Salvador Bra')
+  })
+
+  it('retorna undefined para string vazia ou nula', () => {
+    expect(sanitizeCounterparty('')).toBeUndefined()
+    expect(sanitizeCounterparty(null)).toBeUndefined()
+    expect(sanitizeCounterparty(undefined)).toBeUndefined()
   })
 })
